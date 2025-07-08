@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Application</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        input[type="text"], input[type="password"], button {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #messages {
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 300px;
+            overflow-y: scroll;
+            margin-top: 10px;
+            background-color: #e9e9e9;
+        }
+        .message-item {
+            margin-bottom: 5px;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chat Application</h1>
+
+    <div class="container" id="auth-section">
+        <h2>Register / Login</h2>
+        <label for="username"></label><input type="text" id="username" placeholder="Username">
+        <label for="password"></label><input type="password" id="password" placeholder="Password">
+        <button onclick="registerUser()">Register</button>
+        <button onclick="loginUser()">Login</button>
+        <p id="auth-message"></p>
+    </div>
+
+    <div class="container" id="chat-section" style="display: none;">
+        <h2>Welcome, <span id="current-user"></span>!</h2>
+        <button onclick="logoutUser()">Logout</button>
+
+        <h3>Create Chat Room</h3>
+        <label for="chatroom-name"></label><input type="text" id="chatroom-name" placeholder="Chat Room Name">
+        <button onclick="createChatRoom()">Create Room</button>
+        <p id="chatroom-message"></p>
+
+        <h3>Your Chat Rooms</h3>
+        <ul id="chat-room-list"></ul>
+
+        <h3>Chat Window</h3>
+        <div id="messages"></div>
+        <label for="message-input"></label><input type="text" id="message-input" placeholder="Type your message...">
+        <button onclick="sendMessage()">Send</button>
+        <p id="send-message-status"></p>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script>
+        let stompClient = null;
+        let currentChatRoomId = null;
+        let currentUser = null;
+
+        function showAuthSection() {
+            document.getElementById('auth-section').style.display = 'block';
+            document.getElementById('chat-section').style.display = 'none';
+        }
+
+        function showChatSection() {
+            document.getElementById('auth-section').style.display = 'none';
+            document.getElementById('chat-section').style.display = 'block';
+            document.getElementById('current-user').innerText = currentUser.username;
+            fetchChatRooms();
+        }
+
+        async function registerUser() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const authMessage = document.getElementById('auth-message');
+
+            try {
+                const response = await fetch('/api/users/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    authMessage.className = 'success';
+                    authMessage.innerText = data.message;
+                } else {
+                    authMessage.className = 'error';
+                    authMessage.innerText = data.message;
+                }
+            } catch (error) {
+                authMessage.className = 'error';
+                authMessage.innerText = 'Error during registration: ' + error.message;
+            }
+        }
+
+        async function loginUser() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const authMessage = document.getElementById('auth-message');
+
+            try {
+                const response = await fetch('/api/users/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    authMessage.className = 'success';
+                    authMessage.innerText = data.message;
+                    currentUser = data.user; // Store user data
+                    showChatSection();
+                } else {
+                    authMessage.className = 'error';
+                    authMessage.innerText = data.message;
+                }
+            } catch (error) {
+                authMessage.className = 'error';
+                authMessage.innerText = 'Error during login: ' + error.message;
+            }
+        }
+
+        function logoutUser() {
+            currentUser = null;
+            if (stompClient && stompClient.connected) {
+                stompClient.disconnect();
+            }
+            showAuthSection();
+            document.getElementById('messages').innerHTML = ''; // Clear messages
+            document.getElementById('chat-room-list').innerHTML = ''; // Clear chat rooms
+        }
+
+        async function createChatRoom() {
+            const chatroomName = document.getElementById('chatroom-name').value;
+            const chatroomMessage = document.getElementById('chatroom-message');
+
+            try {
+                const response = await fetch('/api/chatrooms', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: chatroomName })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    chatroomMessage.className = 'success';
+                    chatroomMessage.innerText = data.message;
+                    fetchChatRooms(); // Refresh chat room list
+                } else {
+                    chatroomMessage.className = 'error';
+                    chatroomMessage.innerText = data.message;
+                }
+            } catch (error) {
+                chatroomMessage.className = 'error';
+                chatroomMessage.innerText = 'Error creating chat room: ' + error.message;
+            }
+        }
+
+        async function fetchChatRooms() {
+            const chatRoomList = document.getElementById('chat-room-list');
+            chatRoomList.innerHTML = ''; // Clear existing list
+
+            try {
+                const response = await fetch('/api/chatrooms');
+                const data = await response.json();
+                if (response.ok) {
+                    data.chatRooms.forEach(room => {
+                        const li = document.createElement('li');
+                        li.innerText = room.name;
+                        li.onclick = () => joinChatRoom(room.id, room.name);
+                        li.style.cursor = 'pointer';
+                        chatRoomList.appendChild(li);
+                    });
+                } else {
+                    console.error('Error fetching chat rooms:', data.message);
+                }
+            } catch (error) {
+                console.error('Error fetching chat rooms:', error.message);
+            }
+        }
+
+        function joinChatRoom(roomId, roomName) {
+            if (stompClient && stompClient.connected) {
+                stompClient.disconnect();
+            }
+            currentChatRoomId = roomId;
+            document.getElementById('messages').innerHTML = `<h3>Chat Room: ${roomName}</h3>`;
+            connectToWebSocket();
+            fetchMessages(roomId);
+        }
+
+        function connectToWebSocket() {
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.connect({}, onConnected, onError);
+        }
+
+        function onConnected() {
+            // Subscribe to the Public Topic
+            stompClient.subscribe('/topic/' + currentChatRoomId, onMessageReceived);
+        }
+
+        function onError(error) {
+            console.error('Could not connect to WebSocket server. Please refresh this page to try again!', error);
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const messageContent = messageInput.value.trim();
+            const sendMessageStatus = document.getElementById('send-message-status');
+
+            if (messageContent && stompClient) {
+                const chatMessage = {
+                    chatRoomId: currentChatRoomId,
+                    senderId: currentUser.id,
+                    content: messageContent
+                };
+                stompClient.send("/app/chat.send", {}, JSON.stringify(chatMessage));
+                messageInput.value = '';
+                sendMessageStatus.className = 'success';
+                sendMessageStatus.innerText = 'Message sent!';
+            } else {
+                sendMessageStatus.className = 'error';
+                sendMessageStatus.innerText = 'Cannot send empty message or not connected to chat room.';
+            }
+        }
+
+        async function fetchMessages(roomId) {
+            const messagesDiv = document.getElementById('messages');
+            try {
+                const response = await fetch(`/api/messages/${roomId}`);
+                const data = await response.json();
+                if (response.ok) {
+                    messagesDiv.innerHTML = `<h3>Chat Room: ${data.chatRoomName}</h3>`; // Clear and set room name
+                    data.messages.forEach(msg => {
+                        appendMessage(msg);
+                    });
+                } else {
+                    console.error('Error fetching messages:', data.message);
+                }
+            } catch (error) {
+                console.error('Error fetching messages:', error.message);
+            }
+        }
+
+        function onMessageReceived(payload) {
+            const message = JSON.parse(payload.body);
+            appendMessage(message);
+        }
+
+        function appendMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message-item';
+            messageElement.innerText = `${message.senderId}: ${message.content}`;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
+        }
+
+        // Initial setup
+        showAuthSection();
+    </script>
+</body>
+</html>
