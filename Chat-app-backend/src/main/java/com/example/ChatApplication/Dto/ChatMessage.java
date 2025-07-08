@@ -9,5 +9,5 @@ import lombok.*;
 public class ChatMessage {
     private String chatRoomId;
     private String senderId;
-
+    private String content;
 }
